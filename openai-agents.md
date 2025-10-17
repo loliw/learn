@@ -1,49 +1,83 @@
+# Agent 框架使用教程
+
+## 一、初始化模型
+
+```python
 from agents.extensions.models.litellm_model import LitellmModel
 import os
 from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
-# 从环境变量中读取api_key
+
+# 从环境变量中读取 API Key
 chat_model = "mistral-small-latest"
-base_url="https://api.mistral.ai/v1"
-api_key=os.getenv('mistral_key')
+base_url = "https://api.mistral.ai/v1"
+api_key = os.getenv('mistral_key')
 
 llm = LitellmModel(model=chat_model, api_key=api_key, base_url=base_url)
+```
 
-通过修改上述的三个变量即可使用自己的api
+只需修改上方的三个变量（`chat_model`、`base_url`、`api_key`）即可替换为你自己的 API。
 
-之后可以使用下方代码创建多个智能体：
+---
+
+## 二、创建智能体（Agent）
+
+```python
 from agents import Agent
+
 agent = Agent(
     name="Math Tutor",
-    instructions="You provide help with math problems. Explain your reasoning at each step and include examples",
+    instructions="You provide help with math problems. Explain your reasoning at each step and include examples.",
     model=llm,
 )
+```
 
-其中，可以加入handoffs来告诉智能体可以调用其他哪几个智能体
-加入handoff_description来声明每一个会被调用的智能体的用处，例子如下：
+---
+
+## 三、智能体间协作（handoff）
+
+### 定义 handoff 描述
+
+```python
 math_tutor_agent = Agent(
     name="Math Tutor",
     handoff_description="Specialist agent for math questions",
-    instructions="You provide help with math problems. Explain your reasoning at each step and include examples",
+    instructions="You provide help with math problems. Explain your reasoning at each step and include examples.",
     model=llm,
 )
+```
 
+### 定义主调度智能体
+
+```python
 triage_agent = Agent(
     name="Triage Agent",
-    instructions="You determine which agent to use based on the user's homework question",
+    instructions="You determine which agent to use based on the user's homework question.",
     handoffs=[history_tutor_agent, math_tutor_agent],
     model=llm,
 )
+```
 
-同时可以添加拦截智能体用来让智能体自己决定拦截不符合规定的输入
-from agents import GuardrailFunctionOutput, InputGuardrail, Agent, Runner
+---
+
+## 四、输入拦截智能体（Guardrail）
+
+### 定义输出结构
+
+```python
 from pydantic import BaseModel
 
 class HomeworkOutput(BaseModel):
     is_homework: bool
     reasoning: str
+```
+
+### 定义审查 Agent
+
+```python
+from agents import GuardrailFunctionOutput, InputGuardrail, Agent, Runner
 
 guardrail_agent = Agent(
     name="Guardrail check",
@@ -51,7 +85,11 @@ guardrail_agent = Agent(
     output_type=HomeworkOutput,
     model=llm,
 )
+```
 
+### 包装为 Guardrail 函数
+
+```python
 async def homework_guardrail(ctx, agent, input_data):
     result = await Runner.run(guardrail_agent, input_data, context=ctx.context)
     final_output = result.final_output_as(HomeworkOutput)
@@ -59,16 +97,278 @@ async def homework_guardrail(ctx, agent, input_data):
         output_info=final_output,
         tripwire_triggered=not final_output.is_homework,
     )
+```
 
-上述代码创造了一个拦截审查智能体，然后用函数包装成输出GuardrailFunctionOutput
-之后只需要在参数中加入 input_guardrails，即可进行拦截
+### 在主智能体中启用 Guardrail
+
+```python
 triage_agent = Agent(
     name="Triage Agent",
-    instructions="You determine which agent to use based on the user's homework question",
+    instructions="You determine which agent to use based on the user's homework question.",
     handoffs=[history_tutor_agent, math_tutor_agent],
     input_guardrails=[
         InputGuardrail(guardrail_function=homework_guardrail),
     ],
     model=llm,
 )
-若是被拦截的话会抛出error，InputGuardrailTripwireTriggered
+```
+
+若被拦截，会抛出 `InputGuardrailTripwireTriggered` 错误。
+
+---
+
+## 五、定义工具（Tool）
+
+```python
+@function_tool 
+def get_weather(city: str) -> str: 
+    '''
+    查询一个城市的天气
+
+    Args:
+        city: 要查询天气的城市
+    '''
+    print(f"天气查询工具被调用了，查询的是 {city}")
+    return f"The weather in {city} is sunny."
+```
+
+注释部分非常重要，会被用作智能体理解函数功能的提示信息。
+
+---
+
+## 六、定义结构化输出
+注意必须要支持openaisdk的api接口，例如ds,qw的官方api没有完全适配，但是用vllm或者ollama本地部署即可支持
+不然的话只能通过提示词的方式使用
+
+```python
+from pydantic import BaseModel
+
+class Candidate(BaseModel):
+    name: str
+    experience: str
+
+agent = Agent(
+    name="简历助手",
+    instructions="根据要求的格式抽取相应的信息。",
+    model=llm,
+    output_type=Candidate,
+)
+```
+
+或使用提示词实现严格的 JSON 输出：
+
+```python
+class IntakeOutput(BaseModel):
+    is_homework: bool
+    is_patent: bool
+    reasoning: str
+
+guardrail_agent = Agent(
+    name="Guardrail check",
+    instructions=(
+        "You are a strict JSON generator. "
+        "Decide whether the user's question is about homework and/or patent (IP) consulting. "
+        "Output only ONE single-line JSON object with EXACTLY these keys: "
+        '{"is_homework": true|false, "is_patent": true|false, "reasoning": "<string>"} '
+        "No extra text, no markdown, no code fences."
+    ),
+    output_type=IntakeOutput,
+    model=llm,
+)
+```
+
+---
+
+## 七、上下文传递（RunContextWrapper）
+
+### 定义上下文
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class UserInfo:
+    name: str
+    uid: int
+```
+
+### 工具读取上下文
+
+```python
+@function_tool
+async def fetch_user_age(wrapper: RunContextWrapper[UserInfo]) -> str:
+    '''
+    获取当前用户的年龄信息。
+    '''
+    return f"User {wrapper.context.name} is 47 years old"
+```
+
+---
+
+## 八、动态提示词（Dynamic Instructions）
+
+### 定义动态上下文
+
+```python
+@dataclass
+class PatInfo:
+    ip_type: str
+
+    def advice(self) -> str:
+        if self.ip_type == "发明":
+            return "重点为用户讲解发明专利申请的实质审查要求"
+        elif self.ip_type == "实用新型":
+            return "重点为用户讲解实用新型专利申请的形式审查要求"
+```
+
+### 定义动态提示词函数
+
+```python
+def dynamic_instructions(
+    context: RunContextWrapper[PatInfo], agent: Agent[PatInfo]
+) -> str:
+    return f"用汉赋的句式{context.context.advice()}."
+```
+
+### 应用到智能体
+
+```python
+async def main():
+    ip_info = PatInfo(ip_type="实用新型")
+
+    agent = Agent[PatInfo](
+        name="Assistant",
+        instructions=dynamic_instructions,
+        model=llm,
+    )
+```
+
+---
+
+## 九、Hook（生命周期事件）
+
+### Agent 级 Hook
+
+事件包括：
+- on_start  
+- on_end  
+- on_handoff  
+- on_tool_start  
+- on_tool_end  
+
+```python
+class MyAgentHooks(AgentHooks):
+    def __init__(self):
+        self.event_counter = 0
+
+    async def on_start(self, context: RunContextWrapper, agent: Agent) -> None:
+        self.event_counter += 1
+        print(f"{self.event_counter}: Agent {agent.name} started")
+
+    async def on_end(self, context: RunContextWrapper, agent: Agent, output) -> None:
+        self.event_counter += 1
+        print(f"{self.event_counter}: Agent {agent.name} ended with output {output}")
+```
+
+使用方式：
+
+```python
+agent = Agent(
+    name="旅行助手",
+    model=llm,
+    hooks=MyAgentHooks(),
+    instructions="You are a helpful assistant."
+)
+```
+
+---
+
+### Runner 级 Hook
+
+事件包括：
+- on_agent_start  
+- on_agent_end  
+- on_handoff  
+- on_tool_start  
+- on_tool_end  
+
+```python
+class MyRunHooks(RunHooks):
+    def __init__(self):
+        self.event_counter = 0
+
+    async def on_agent_start(self, context: RunContextWrapper, agent: Agent) -> None:
+        self.event_counter += 1
+        print(f"{self.event_counter}: Agent {agent.name} started")
+
+    async def on_agent_end(self, context: RunContextWrapper, agent: Agent, output) -> None:
+        self.event_counter += 1
+        print(f"{self.event_counter}: Agent {agent.name} ended with output {output}")
+```
+
+使用方式：
+
+```python
+async def main():
+    result = await Runner.run(agent, hooks=MyRunHooks(), input="孟子全名叫什么?")
+```
+
+---
+
+## 十、流式输出（Streaming）
+
+```python
+async def main():
+    result = Runner.run_streamed(agent, "给我讲个程序员相亲的笑话")
+    async for event in result.stream_events():
+        if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+            print(event.data.delta, end="", flush=True)
+```
+
+常见的 `event.type`：
+- raw_response_event  
+- agent_updated_stream_event  
+- run_item_stream_event  
+
+---
+
+## 十一、多轮对话（Multi-turn）
+
+### 消息输入示例
+
+```python
+messages = [
+    {"role": "user", "content": "孔子的全名叫什么?"},
+    {"role": "user", "content": "孟子的全名叫什么?"},
+]
+
+result = await Runner.run(agent, input=messages)
+```
+
+### 使用 `to_input_list()` 实现上下文延续
+
+```python
+# 第一轮
+result = await Runner.run(agent, "What city is the Golden Gate Bridge in?")
+print(result.final_output)  # San Francisco
+
+# 第二轮
+new_input = result.to_input_list() + [{"role": "user", "content": "What state is it in?"}]
+result = await Runner.run(agent, new_input)
+print(result.final_output)
+```
+
+---
+
+## 十二、终端交互 Demo
+
+```python
+async def main():
+    await run_demo_loop(agent)
+```
+
+可在终端进行交互式对话。
+
+---
+
+来源：https://github.com/datawhalechina/wow-agent/tree/main/tutorial/%E7%AC%AC03%E7%AB%A0-openai-agents
