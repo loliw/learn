@@ -371,4 +371,58 @@ async def main():
 
 ---
 
+## 十二、工具调用 Demo
+有三类工具：
+1.托管工具（只能openai模型）
+
+2.函数调用（python函数）
+
+3.Agent作为工具：
+当不想让子agent接管控制权，比如严格的流水线，或者任务输入输出清晰：出题、改写、归纳、抽取字段、生成材料清单、审校一段文本等。
+需要并发，并且信息完备，不需要构思任务
+
+若是想将一个agent转为tool可以使用as_tool，如下所示：
+```python
+spanish_agent = Agent(
+    name="Spanish agent",
+    instructions="You translate the user's message to Spanish",
+    model=llm,
+)
+
+french_agent = Agent(
+    name="French agent",
+    instructions="You translate the user's message to French",
+    model=llm,
+)
+
+orchestrator_agent = Agent(
+    name="orchestrator_agent",
+    instructions=(
+        "You are a translation agent. You use the tools given to you to translate."
+        "If asked for multiple translations, you call the relevant tools."
+    ),
+    model=llm,
+    tools=[
+        spanish_agent.as_tool(
+            tool_name="translate_to_spanish",
+            tool_description="Translate the user's message to Spanish",
+        ),
+        french_agent.as_tool(
+            tool_name="translate_to_french",
+            tool_description="Translate the user's message to French",
+        ),
+    ],
+)
+```
+
+可以像上面提到过的那样用@function_tool创建函数调用工具，然后通过@function_tool(failure_error_function=custom_error_handler)来规定当这个工具处理报错了如何去处理，类似于这样：
+```python
+def custom_error_handler(e: Exception) -> str:
+    return f"⚠️ 工具执行失败: {type(e).__name__} - {str(e)}。请检查输入参数格式。"
+
+@function_tool(failure_error_function=custom_error_handler)
+async def divide(wrapper, a: int, b: int) -> str:
+    return str(a / b)
+```
+
 来源：https://github.com/datawhalechina/wow-agent/tree/main/tutorial/%E7%AC%AC03%E7%AB%A0-openai-agents
