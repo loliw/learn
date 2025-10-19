@@ -425,4 +425,91 @@ async def divide(wrapper, a: int, b: int) -> str:
     return str(a / b)
 ```
 
+## 十二、mcp
+mcp有三种server
+1.stdio
+2.sse
+3.StreamableHttp
+
+如下可以创建一个sse的mcp server，使用@mcp.tool()
+```python
+import random
+from mcp.server.fastmcp import FastMCP
+# Create server
+mcp = FastMCP("Secret Word")
+@mcp.tool()
+def get_secret_word() -> str:
+    print("使用工具 get_secret_word()")
+    return random.choice(["apple", "banana", "cherry"])
+if __name__ == "__main__":
+    mcp.run(transport="sse")
+```
+
+之后通过运行这段代码即可将服务部署在端口上
+之后可以用MCPServerStdio、MCPServerSse和MCPServerStreamableHttp来连接上述三种server，下面是链接sse的代码
+```python
+async def run(mcp_server: MCPServer):
+    agent = Agent(
+        name="Assistant",
+        instructions="Use the tools to answer the questions.",
+        model=llm,
+        mcp_servers=[mcp_server],
+        model_settings=ModelSettings(tool_choice="required"),
+    )
+
+    # Run the `get_secret_word` tool
+    message = "What's the secret word?"
+    print(f"\n\nRunning: {message}")
+    result = await Runner.run(starting_agent=agent, input=message)
+    print(result.final_output)
+
+
+async def main():
+    async with MCPServerSse(
+        name="SSE Python Server",
+        params={
+            "url": "http://127.0.0.1:8000/sse",
+        },
+    ) as server:
+        await run(server)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+第三方的mcp可以从下面两个网站找：
+https://mcpmarket.cn/ 
+https://www.modelscope.cn/mcp 
+然后申请到的第三方mcp可以用下列代码进行使用
+```python
+async def main():
+    async with MCPServerSse(
+        params={
+            "url": "<填自己申请的MCP服务的SSE地址>",
+        }
+    ) as my_mcp_server: # 建议用这种上下文写法，否则需要手动连接和关闭MCP服务。
+        agent = Agent(
+            name="Assistant",
+            instructions="你是一个火车票查询助手，能够查询火车票信息。",
+            mcp_servers=[my_mcp_server],
+            model_settings=ModelSettings(tool_choice="required"),
+            model=llm,
+        )
+
+        message = "明天从广州到杭州可以买哪些火车票？"
+        print(f"Running: {message}")
+        result = await Runner.run(starting_agent=agent, input=message)
+        print(result.final_output)
+```
+
+如果想用本地的开源第三方的mcp的话就这样
+```python
+async with MCPServerStdio(
+    params={
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/学习资料"],
+    }
+) as my_mcp_server:
+```
+
 来源：https://github.com/datawhalechina/wow-agent/tree/main/tutorial/%E7%AC%AC03%E7%AB%A0-openai-agents
