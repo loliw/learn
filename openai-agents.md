@@ -512,4 +512,82 @@ async with MCPServerStdio(
 ) as my_mcp_server:
 ```
 
+## 十三、移交
+把一个任务转交给另一个智能体就是移交。底层是以工具的形式实现的，如果向名为Refund Agent智能体的转交，对应工具将被命名为transfer_to_refund_agent
+除了handoffs参数，也可以用handoff()函数自定义移交
+最基础的就是
+```python
+triage_agent = Agent(
+    name="Triage Agent",
+    instructions="You determine which agent to use based on the user's homework question",
+    handoffs=[history_tutor_agent, math_tutor_agent],
+    model=llm,
+)
+```
+
+用handoff()的话就是
+```python
+def on_handoff(ctx: RunContextWrapper[None]):
+    print("Handoff called")
+handoff_obj = handoff(
+    agent=math_tutor_agent,
+    on_handoff=on_handoff,
+    tool_name_override="custom_handoff_tool",
+    tool_description_override="Custom description",
+)
+
+triage_agent = Agent(
+    name="Triage Agent",
+    instructions="You determine which agent to use based on the user's homework question",
+    handoffs=[history_tutor_agent, handoff_obj],
+    model=llm,
+)
+```
+这里参数
+agent是要移交的agent
+on_handoff是出发移交时执行的函数
+tool_name_override是覆盖默认的移交工具名称，因为系统默认的是transfer_to_<agent_name>不直观也不好理解
+tool_description_override是覆盖默认工具描述 ，因为系统默认的是Transfer control to agent <agent_name>，模型不好理解
+input_type可以指定接受的输入类型
+input_filter用来过滤后续智能体接收的输入，因为在移交的时候，目标智能体接受的是上一个智能体完整的全部输出，但是有时候并不需要很多无关信息，所以可以像这样自己写，或者调用一些内置好的方法
+```python
+def my_input_filter(data: HandoffInputData) -> HandoffInputData:
+    # 只保留最后三条用户消息
+    new_history = [m for m in data.history[-3:] if m.role == "user"]
+    data.history = new_history
+    return data
+```
+又比如
+```python
+handoff_obj = handoff(
+    agent=math_tutor_agent,
+    input_filter=handoff_filters.remove_all_tools,
+)
+```
+
+为了更好的移交，建议使用前缀模板加入到提示词中，如下
+```python
+triage_prompt = prompt_with_handoff_instructions(
+    base_prompt="你是一个负责问题分诊的智能体，根据问题内容决定是否转交专家。",
+    handoffs=[handoff_math, handoff_history],
+)
+
+# 创建 Agent
+triage_agent = Agent(
+    name="Triage Agent",
+    instructions=triage_prompt,
+    handoffs=[handoff_math, handoff_history],
+    model=llm,
+)
+```
+
+又或者
+```python
+billing_agent = Agent(
+    name="Billing agent",
+    instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
+    <Fill in the rest of your prompt here>.""",
+)
+```
+
 来源：https://github.com/datawhalechina/wow-agent/tree/main/tutorial/%E7%AC%AC03%E7%AB%A0-openai-agents
