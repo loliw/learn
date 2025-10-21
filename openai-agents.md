@@ -590,4 +590,44 @@ billing_agent = Agent(
 )
 ```
 
+## 十四、追踪
+追踪功能默认启用。如需禁用可通过以下两种方式：
+1、通过设置环境变量 OPENAI_AGENTS_DISABLE_TRACING=1 全局关闭追踪功能 2、针对单个程序文件禁用追踪：将agents.set_tracing_disabled 中的 disabled 参数设为True 3、针对单次运行禁用追踪：将 agents.run.RunConfig.tracing_disabled 设为 True
+
+Traces（追踪记录） 表示一个完整"工作流"的端到端操作，由多个 Span 组成。追踪记录包含以下属性：
+workflow_name：表示逻辑工作流或应用名称，例如"代码生成"或"客户服务"
+trace_id：追踪记录的唯一标识符。若未提供将自动生成，必须符合 trace_<32_alphanumeric> 格式
+group_id：可选分组 ID，用于关联同一会话中的多个追踪记录（例如聊天线程 ID）
+disabled：若为 True，则该追踪记录不会被保存
+metadata：追踪记录的元数据（可选）
+Spans（跨度） 表示具有起止时间的操作单元。跨度包含：
+started_at 和 ended_at 时间戳
+所属追踪记录的 trace_id
+指向父级跨度的 parent_id（如存在）
+记录跨度详情的 span_data。例如 AgentSpanData 包含智能体信息，GenerationSpanData 包含大模型生成信息等
+
+当run的时候追踪就会被记录到trace() 中
+agent_span()记录每次智能体运行
+generation_span()记录大模型生成内容
+function_span()记录函数工具调用
+guardrail_span()记录防护机制触发
+handoff_span()记录移交智能体
+transcription_span()记录语音转文字
+speech_span()记录文字转语音
+
+可以像这样把多条run放到同一个trace
+```python
+async def main():
+    agent = Agent(name="Joke generator", instructions="Tell funny jokes.")
+
+    with trace("Joke workflow"): 
+        first_result = await Runner.run(agent, "Tell me a joke")
+        second_result = await Runner.run(agent, f"Rate this joke: {first_result.final_output}")
+```
+
+可以用set_trace_processors()替换掉默认的追踪处理器，比如说换成langsmith
+```python
+from langsmith.wrappers import OpenAIAgentsTracingProcessor
+set_trace_processors([OpenAIAgentsTracingProcessor()])
+```
 来源：https://github.com/datawhalechina/wow-agent/tree/main/tutorial/%E7%AC%AC03%E7%AB%A0-openai-agents
