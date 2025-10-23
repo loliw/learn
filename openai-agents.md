@@ -630,4 +630,62 @@ async def main():
 from langsmith.wrappers import OpenAIAgentsTracingProcessor
 set_trace_processors([OpenAIAgentsTracingProcessor()])
 ```
+
+## 十五、护栏
+为了防止智能体被恶意使用进行其他工作，可以通过一个快速/廉价的模型运行护栏。如果护栏检测到恶意使用行为，它可以立即触发错误，从而阻止昂贵模型的运行，节省时间和成本。
+分为两种：
+输入护栏：在初始用户输入时运行，输入护栏只会在第一个智能体生效
+输出护栏：在最终智能体输出时运行
+
+护栏的运行流程是，首先，护栏接收与传递给智能体相同的输入 接着，防护函数运行并生成一个GuardrailFunctionOutput，随后被封装到InputGuardrailResult中 最后，我们检查.tripwire_triggered是否为true。如果为true，则触发InputGuardrailTripwireTriggered异常
+
+需要先创建一个护栏智能体，然后用@input_guardrail做成输出GuardrailFunctionOutput的护栏，然后填入input_guardrails参数
+```python
+class MathHomeworkOutput(BaseModel):
+    is_math_homework: bool
+    reasoning: str
+
+guardrail_agent = Agent( 
+    name="Guardrail check",
+    instructions="Check if the user is asking you to do their math homework.",
+    model=llm,
+    output_type=MathHomeworkOutput,
+)
+
+
+@input_guardrail
+async def math_guardrail( 
+    ctx: RunContextWrapper[None], agent: Agent, input: str | list[TResponseInputItem]
+) -> GuardrailFunctionOutput:
+    result = await Runner.run(guardrail_agent, input, context=ctx.context)
+
+    return GuardrailFunctionOutput(
+        output_info=result.final_output, 
+        tripwire_triggered=result.final_output.is_math_homework,
+    )
+
+
+agent = Agent(  
+    name="Customer support agent",
+    instructions="You are a customer support agent. You help customers with their questions.",
+    model=llm,
+    input_guardrails=[math_guardrail],
+)
+
+async def main():
+    # This should trip the guardrail
+    try:
+        await Runner.run(agent, "Hello, can you help me solve for x: 2x + 3 = 11?")
+        print("Guardrail didn't trip - this is unexpected")
+
+    except InputGuardrailTripwireTriggered:
+        print("Math homework guardrail tripped")
+```
+输出护栏同理，只不过换成@output_guardrail，和填入output_guardrails
+
+## 十五、编排
+分为两种
+1.大模型自主编排模式：适合开放式任务
+2.代码化编排模式：适合，执行速度、成本控制和性能表现方面有要求的情况
+
 来源：https://github.com/datawhalechina/wow-agent/tree/main/tutorial/%E7%AC%AC03%E7%AB%A0-openai-agents
